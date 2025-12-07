@@ -1,0 +1,460 @@
+// lib/main.dart
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:uuid/uuid.dart';
+
+// Firebase packages
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+// If you used FlutterFire CLI, import the generated options:
+// import 'firebase_options.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await Firebase.initializeApp();
+  runApp(const CakeApp());
+}
+
+class CakeApp extends StatelessWidget {
+  const CakeApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthState()),
+        Provider(create: (_) => FirebaseFirestore.instance),
+      ],
+      child: MaterialApp(
+        title: 'Cake Ordering',
+        theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: Colors.pink)),
+        home: const RootScreen(),
+      ),
+    );
+  }
+}
+
+/* ----------------------------
+   Authentication & App State
+   ---------------------------- */
+class AuthState extends ChangeNotifier {
+  User? user;
+  bool initialized = false;
+  bool isAdmin = false;
+  String? fcmToken;
+
+  AuthState() {
+    FirebaseAuth.instance.authStateChanges().listen(_onAuthChanged);
+    // Request FCM permission and token irrespective of auth; token stored when user logs in.
+    _setupFCM();
+  }
+
+  Future<void> _setupFCM() async {
+    FirebaseMessaging messaging = FirebaseMessaging.instance;
+    NotificationSettings settings = await messaging.requestPermission();
+    // get token (might be null on web without config)
+    try {
+      fcmToken = await messaging.getToken();
+    } catch (e) {
+      fcmToken = null;
+    }
+  }
+
+  Future<void> _onAuthChanged(User? u) async {
+    user = u;
+    if (user != null) {
+      // Ensure there is a users doc
+      final userDocRef = FirebaseFirestore.instance.collection('users').doc(user!.uid);
+      final doc = await userDocRef.get();
+      if (!doc.exists) {
+        await userDocRef.set({
+          'email': user!.email,
+          'displayName': user!.displayName ?? '',
+          'isAdmin': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        isAdmin = false;
+      } else {
+        isAdmin = (doc.data()?['isAdmin'] ?? false) as bool;
+      }
+
+      // Save FCM token with user doc for notifications
+      if (fcmToken != null) {
+        await userDocRef.update({'fcmToken': fcmToken});
+      }
+    } else {
+      isAdmin = false;
+    }
+    initialized = true;
+    notifyListeners();
+  }
+
+  Future<void> signOut() => FirebaseAuth.instance.signOut();
+}
+
+/* ----------------------------
+   Root screen - shows Auth or App
+   ---------------------------- */
+class RootScreen extends StatelessWidget {
+  const RootScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final auth = Provider.of<AuthState>(context);
+    if (!auth.initialized) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (auth.user == null) return const AuthScreen();
+    return auth.isAdmin ? AdminHome() : UserHome();
+  }
+}
+
+/* ----------------------------
+   Auth (Login / Register)
+   ---------------------------- */
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key});
+  @override
+  State<AuthScreen> createState() => _AuthScreenState();
+}
+class _AuthScreenState extends State<AuthScreen> {
+  bool isLogin = true;
+  final _form = GlobalKey<FormState>();
+  String email = '', password = '', name = '';
+  bool loading = false;
+  String? error;
+
+  Future<void> submit() async {
+    if (!_form.currentState!.validate()) return;
+    _form.currentState!.save();
+    setState(() { loading = true; error = null; });
+    try {
+      if (isLogin) {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
+      } else {
+        final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(email: email, password: password);
+        await cred.user?.updateDisplayName(name);
+        // create users doc
+        await FirebaseFirestore.instance.collection('users').doc(cred.user!.uid).set({
+          'email': email,
+          'displayName': name,
+          'isAdmin': false,
+          'createdAt': FieldValue.serverTimestamp()
+        });
+      }
+    } on FirebaseAuthException catch (e) {
+      error = e.message;
+    } catch (e) {
+      error = e.toString();
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Cake Order - Login')),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Form(
+                key: _form,
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(isLogin ? 'Welcome back' : 'Create account', style: Theme.of(context).textTheme.headlineSmall),
+                  const SizedBox(height: 12),
+                  if (!isLogin)
+                    TextFormField(
+                      decoration: const InputDecoration(labelText: 'Name'),
+                      onSaved: (v) => name = v ?? '',
+                    ),
+                  TextFormField(
+                    decoration: const InputDecoration(labelText: 'Email'),
+                    keyboardType: TextInputType.emailAddress,
+                    validator: (v) => (v == null || v.isEmpty) ? 'Enter email' : null,
+                    onSaved: (v) => email = v!.trim(),
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    decoration: const InputDecoration(labelText: 'Password'),
+                    obscureText: true,
+                    validator: (v) => (v == null || v.length < 6) ? 'Min 6 chars' : null,
+                    onSaved: (v) => password = v ?? '',
+                  ),
+                  const SizedBox(height: 12),
+                  if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
+                  ElevatedButton(onPressed: loading ? null : submit, child: Text(isLogin ? 'Login' : 'Sign up')),
+                  TextButton(onPressed: () => setState(() => isLogin = !isLogin), child: Text(isLogin ? 'Create account' : 'Have an account? Login'))
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* ----------------------------
+   User Home (Place Orders)
+   ---------------------------- */
+class UserHome extends StatefulWidget {
+  const UserHome({super.key});
+  @override
+  State<UserHome> createState() => _UserHomeState();
+}
+class _UserHomeState extends State<UserHome> {
+  final _form = GlobalKey<FormState>();
+  String size = '6 inch';
+  String flavor = 'Chocolate';
+  String messageOnCake = '';
+  String address = '';
+  String phone = '';
+  int quantity = 1;
+  bool loading = false;
+
+  Future<void> placeOrder() async {
+    final auth = Provider.of<AuthState>(context, listen:false);
+    final user = auth.user!;
+    if (!_form.currentState!.validate()) return;
+    _form.currentState!.save();
+    setState(() => loading = true);
+
+    final orders = FirebaseFirestore.instance.collection('orders');
+    final id = const Uuid().v4();
+    final doc = {
+      'orderId': id,
+      'uid': user.uid,
+      'customerName': user.displayName ?? user.email,
+      'email': user.email,
+      'phone': phone,
+      'address': address,
+      'size': size,
+      'flavor': flavor,
+      'messageOnCake': messageOnCake,
+      'quantity': quantity,
+      'price': computePrice(size, quantity),
+      'status': 'Pending',
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'fcmToken': auth.fcmToken
+    };
+
+    try {
+      await orders.doc(id).set(doc);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Order placed')));
+      _form.currentState!.reset();
+      setState(() { size = '6 inch'; flavor = 'Chocolate'; quantity = 1; });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      setState(() => loading = false);
+    }
+  }
+
+  int computePrice(String size, int quantity) {
+    // simplistic pricing
+    int base;
+    if (size.contains('6')) base = 800;
+    else if (size.contains('8')) base = 1200;
+    else base = 2000;
+    return base * quantity;
+  }
+
+  Widget orderForm() {
+    return Card(
+      margin: const EdgeInsets.all(12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Form(
+          key: _form,
+          child: Column(children: [
+            Text('Place a Cake Order', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              value: size,
+              items: ['6 inch', '8 inch', 'Half kg / Custom'].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+              onChanged: (v) => setState(() => size = v!),
+              decoration: const InputDecoration(labelText: 'Size'),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: flavor,
+              items: ['Chocolate', 'Vanilla', 'Red Velvet', 'Black Forest'].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+              onChanged: (v) => setState(() => flavor = v!),
+              decoration: const InputDecoration(labelText: 'Flavor'),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              decoration: const InputDecoration(labelText: 'Message on cake (optional)'),
+              onSaved: (v) => messageOnCake = v ?? '',
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              decoration: const InputDecoration(labelText: 'Phone'),
+              keyboardType: TextInputType.phone,
+              validator: (v) => (v == null || v.isEmpty) ? 'Enter phone' : null,
+              onSaved: (v) => phone = v ?? '',
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              decoration: const InputDecoration(labelText: 'Delivery address'),
+              validator: (v) => (v == null || v.isEmpty) ? 'Enter address' : null,
+              onSaved: (v) => address = v ?? '',
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              const Text('Quantity:'),
+              const SizedBox(width: 12),
+              IconButton(onPressed: () => setState(() { if (quantity>1) quantity--; }), icon: const Icon(Icons.remove)),
+              Text('$quantity'),
+              IconButton(onPressed: () => setState(() { quantity++; }), icon: const Icon(Icons.add)),
+              const Spacer(),
+              ElevatedButton(onPressed: loading ? null : placeOrder, child: loading ? const CircularProgressIndicator() : const Text('Place Order')),
+            ])
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget myOrdersList() {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final stream = FirebaseFirestore.instance.collection('orders').where('uid', isEqualTo: uid).orderBy('createdAt', descending:true).snapshots();
+
+    return Expanded(
+      child: StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
+        stream: stream,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          final docs = snap.data?.docs ?? [];
+          if (docs.isEmpty) return const Center(child: Text('No orders yet'));
+          return ListView.builder(
+            itemCount: docs.length,
+            itemBuilder: (context, i) {
+              final data = docs[i].data();
+              return ListTile(
+                title: Text('${data['size']} ${data['flavor']} x${data['quantity']}'),
+                subtitle: Text('Status: ${data['status']} \n${data['messageOnCake'] ?? ''}'),
+                isThreeLine: true,
+                trailing: Text('₹${data['price'] ?? ''}'),
+              );
+            }
+          );
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser!;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Cake Shop - User'),
+        actions: [
+          IconButton(onPressed: () => FirebaseAuth.instance.signOut(), icon: const Icon(Icons.logout))
+        ],
+      ),
+      body: Column(children: [
+        ListTile(title: Text(user.displayName ?? user.email ?? 'User'), subtitle: Text(user.email ?? '')),
+        orderForm(),
+        const Padding(padding: EdgeInsets.symmetric(horizontal:12, vertical:6), child: Text('My Orders', style: TextStyle(fontWeight: FontWeight.bold))),
+        myOrdersList(),
+      ]),
+    );
+  }
+}
+
+/* ----------------------------
+   Admin Home (List all orders & update)
+   ---------------------------- */
+class AdminHome extends StatelessWidget {
+  AdminHome({super.key});
+  final ordersRef = FirebaseFirestore.instance.collection('orders');
+
+  Future<void> updateStatus(BuildContext context, String orderId, String newStatus, String fcmToken) async {
+    await ordersRef.doc(orderId).update({'status': newStatus, 'updatedAt': FieldValue.serverTimestamp()});
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Order $orderId -> $newStatus')));
+
+    // Optionally: call a Cloud Function or server to deliver FCM push using Admin SDK
+    // Here we only stored user's fcmToken earlier; actual push must be sent from server or cloud function.
+  }
+
+  void showOrderDialog(BuildContext context, QueryDocumentSnapshot<Map<String,dynamic>> doc) {
+    final data = doc.data();
+    showDialog(context: context, builder: (ctx) {
+      return AlertDialog(
+        title: Text('Order ${data['orderId']}'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Customer: ${data['customerName']}'),
+          Text('Phone: ${data['phone']}'),
+          Text('Address: ${data['address']}'),
+          Text('Cake: ${data['size']} - ${data['flavor']} x${data['quantity']}'),
+          Text('Message: ${data['messageOnCake'] ?? ''}'),
+          Text('Status: ${data['status']}'),
+        ]),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (val) async {
+              await updateStatus(context, doc.id, val, data['fcmToken'] ?? '');
+              Navigator.of(ctx).pop();
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'Preparing', child: Text('Preparing')),
+              const PopupMenuItem(value: 'OutForDelivery', child: Text('Out For Delivery')),
+              const PopupMenuItem(value: 'Delivered', child: Text('Delivered')),
+              const PopupMenuItem(value: 'Cancelled', child: Text('Cancelled')),
+            ],
+            child: ElevatedButton(onPressed: null, child: const Text('Update Status')),
+          ),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+        ],
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stream = ordersRef.orderBy('createdAt', descending:true).snapshots();
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Admin Panel - Orders'),
+        actions: [
+          IconButton(icon: const Icon(Icons.logout), onPressed: () => FirebaseAuth.instance.signOut())
+        ],
+      ),
+      body: StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
+        stream: stream,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          final docs = snap.data?.docs ?? [];
+          if (docs.isEmpty) return const Center(child: Text('No orders yet'));
+          return ListView.builder(
+            itemCount: docs.length,
+            itemBuilder: (context, i) {
+              final d = docs[i];
+              final data = d.data();
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: ListTile(
+                  onTap: () => showOrderDialog(context, d),
+                  title: Text('${data['customerName']} — ${data['size']} ${data['flavor']}'),
+                  subtitle: Text('${data['status']} • ${data['createdAt'] != null ? (data['createdAt'] as Timestamp).toDate().toLocal().toString() : ''}'),
+                  trailing: Text('₹${data['price'] ?? ''}'),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
