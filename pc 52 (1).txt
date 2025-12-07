@@ -1,0 +1,101 @@
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+void main() {
+  runApp(const CommentsApp());
+}
+
+class CommentsApp extends StatelessWidget {
+  const CommentsApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'User Comments',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        useMaterial3: true,
+      ),
+      home: const CommentsScreen(),
+    );
+  }
+}
+
+class CommentsScreen extends StatefulWidget {
+  const CommentsScreen({super.key});
+
+  @override
+  State<CommentsScreen> createState() => _CommentsScreenState();
+}
+
+class _CommentsScreenState extends State<CommentsScreen> {
+  List<dynamic> comments = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchComments();
+  }
+
+  Future<void> fetchComments() async {
+    final response = await http.get(
+      Uri.parse('https://jsonplaceholder.typicode.com/comments'),
+    );
+
+    if (response.statusCode == 200) {
+      setState(() {
+        comments = json.decode(response.body);
+        isLoading = false;
+      });
+    } else {
+      throw Exception('Failed to load comments');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('User Comments'),
+        centerTitle: true,
+      ),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              itemCount: comments.length,
+              itemBuilder: (context, index) {
+                final comment = comments[index];
+                return Card(
+                  elevation: 3,
+                  margin:
+                      const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      child: Text(comment['name'][0].toUpperCase()),
+                    ),
+                    title: Text(
+                      comment['name'],
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(comment['email'],
+                            style: const TextStyle(
+                                color: Colors.blueGrey, fontSize: 14)),
+                        const SizedBox(height: 6),
+                        Text(comment['body']),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
