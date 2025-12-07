@@ -1,0 +1,162 @@
+import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Authentication Flow',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
+      ),
+      home: AuthScreen(),
+    );
+  }
+}
+
+class AuthScreen extends StatefulWidget {
+  @override
+  _AuthScreenState createState() => _AuthScreenState();
+}
+
+class _AuthScreenState extends State<AuthScreen> {
+  final _formKey = GlobalKey<FormState>();
+
+  String _email = '';
+  String _password = '';
+  bool _isLogin = true;
+
+  Future<void> _submit() async {
+    final isValid = _formKey.currentState!.validate();
+    if (!isValid) {
+      // If validation fails, show a snackbar indicating the issue.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please correct the errors in the form.")),
+      );
+      return;
+    }
+    _formKey.currentState!.save();
+
+    // Simulate an authentication process (e.g., a network request).
+    // In a real application, this would involve actual API calls or
+    // a backend service like Firebase Authentication.
+    try {
+      // Simulate network delay
+      await Future<void>.delayed(const Duration(seconds: 2));
+
+      // Simulate successful login/signup
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text(
+                '${_isLogin ? 'Login' : 'Sign Up'} successful for $_email!')),
+      );
+
+      // Navigate to the HomeScreen upon successful authentication.
+      // pushReplacement is used to prevent going back to the AuthScreen
+      // with the back button.
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute<void>(builder: (context) => const HomeScreen()),
+      );
+    } catch (e) {
+      // Catch any unexpected errors during the simulated process.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("An authentication error occurred: ${e.toString()}")),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(_isLogin ? 'Login' : 'Sign Up')),
+      body: Center(
+        child: Card(
+          margin: const EdgeInsets.all(16),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  TextFormField(
+                    key: const ValueKey('email'),
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(labelText: 'Email Address'),
+                    validator: (String? value) {
+                      if (value == null || !value.contains('@')) {
+                        return 'Please enter a valid email address.';
+                      }
+                      return null;
+                    },
+                    onSaved: (String? value) => _email = value!.trim(),
+                  ),
+                  TextFormField(
+                    key: const ValueKey('password'),
+                    obscureText: true,
+                    decoration: const InputDecoration(labelText: 'Password'),
+                    validator: (String? value) {
+                      if (value == null || value.length < 6) {
+                        return 'Password must be at least 6 characters long.';
+                      }
+                      return null;
+                    },
+                    onSaved: (String? value) => _password = value!.trim(),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _submit,
+                    child: Text(_isLogin ? 'Login' : 'Sign Up'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _isLogin = !_isLogin;
+                      });
+                    },
+                    child: Text(_isLogin
+                        ? 'Create new account'
+                        : 'Already have an account? Login'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Welcome Home'),
+        // Setting this to false prevents an automatic back button from appearing
+        // after using Navigator.pushReplacement.
+        automaticallyImplyLeading: false,
+      ),
+      body: const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16.0),
+          child: Text(
+            'You are successfully authenticated and have reached the home screen!',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ),
+    );
+  }
+}
