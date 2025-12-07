@@ -1,0 +1,85 @@
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+void main() {
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'User Comments',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: CommentsScreen(),
+    );
+  }
+}
+
+class CommentsScreen extends StatefulWidget {
+  @override
+  _CommentsScreenState createState() => _CommentsScreenState();
+}
+
+class _CommentsScreenState extends State<CommentsScreen> {
+  List<dynamic> _comments = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchComments();
+  }
+
+  // Fetch comments from the API
+  Future<void> fetchComments() async {
+    final response = await http
+        .get(Uri.parse('https://jsonplaceholder.typicode.com/comments'));
+
+    if (response.statusCode == 200) {
+      setState(() {
+        _comments = json.decode(response.body);
+        _isLoading = false;
+      });
+    } else {
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load comments')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('User Comments')),
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              itemCount: _comments.length,
+              itemBuilder: (context, index) {
+                final comment = _comments[index];
+                return Card(
+                  margin: const EdgeInsets.symmetric(
+                      vertical: 6, horizontal: 10),
+                  elevation: 3,
+                  child: ListTile(
+                    title: Text(
+                      comment['name'],
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    subtitle: Text(comment['email']),
+                    leading: CircleAvatar(
+                      child: Text(comment['name'][0].toUpperCase()),
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
